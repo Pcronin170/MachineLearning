@@ -1,0 +1,182 @@
+---
+title: "Machine Learning Assignment"
+author: "Patrick Cronin"
+date: "March 27, 2016"
+output: html_document
+---
+
+```{r,echo = FALSE}
+setwd("/Users/SRG/Desktop/Coursera/MachineLearning")
+```
+
+```{r, echo=FALSE}
+training.raw = read.csv("pmL-training.csv",header = TRUE)
+names(training.raw) = tolower(names(training.raw))
+```
+
+The goal of this assignment is to use a data set of personal activity data where the 6 users are instructed to do a dumbell exercise correctly and incorrectly.  Our goal is to develop a machine learning algorithm to identify if they are doing the exercise correctly.  We will validate our algorithms on a testing set of 20 additional observations.
+
+Upon an initial observation a large number of the columns are NA except for when the column new_window equals yes. I peaked at the testing dataset and I see that the column new_window is always equal to no. Therefore I'll remove many of the columns that are only populated when new_window is yes.  Then I'll remove all the remaining columns where the fields are blank or empty
+
+```{r,echo=TRUE}
+#Drop new_window = no
+training.raw = training.raw[training.raw$new_window == "no",]
+
+#Drop NA columns
+NAcols <- sapply(training.raw, function (k) all(is.na(k)))
+training.raw <- training.raw[!NAcols]
+
+#Drop Blank Columns
+blankcols = sapply(training.raw,function(k) all(k == ""))
+training.raw = training.raw[!blankcols]
+
+#Clean up memory
+rm(blankcols);rm(NAcols)
+```
+
+This simple cuts my data set down to 60 variables as opposed to 160.  In addition when I look further at this data set there are other issues.  If this is suppsoed to be a model that can be generalized to others, I need to remove the usernames.  Also, the testing set just has 20 single observations.  Therefore the time variables are not going to be useful, and I need to just stick with the data coming from the monitors. Therefore I'll remove a few more columns.
+
+```{r,echo = TRUE}
+training.raw$x = NULL;
+training.raw$raw_timestamp_part_1 = NULL;
+training.raw$raw_timestamp_part_2 = NULL;
+training.raw$cvtd_timestamp = NULL;
+training.raw$new_window = NULL;
+training.raw$num_window = NULL
+```
+
+Now I can see that my data set is down to 53 predictors and 1 outcome variable.  I left the username becuase I think that is going to be important with the final prediction.  This is a much more reasonable data set to deal with and I'll probably have more luck when I try to fit a machine learning algorithm.
+
+Becuase I have so much data, I think I'll split my data 70:30 into a training, and testing.
+```{r,echo= TRUE}
+library(caret)
+set.seed(999)
+
+#Create 70:30 data partition for training and remaining data
+inTrain = createDataPartition(y = training.raw$classe,p = 0.7,list = FALSE)
+training = training.raw[inTrain,]
+testing = training.raw[-inTrain,]
+
+#Always a good idea to remove unnecessary stuff to preserve memory
+rm(training.raw);rm(inTrain)
+```
+
+My first attempt was for a random forest on all the variables. However, my main problem was that it took way too long to run.  Therefore as a test I cut it down to just the barbell variables.  This is still taking much to long to run on my machine with 4 megs of ram.
+
+It appears I really need to cut this down if I'm going to have a chance to finish by the deadline.  Since many of these variables are correlated (i.e. all from the same sensor), I instead broke them down into prinicpal components based on the machine they came from.
+```{r,echo=TRUE}
+
+#Get column references for the belt, arm, dumbbell, and forearm variables
+belt.vars = grep("_belt",names(training))
+arm.vars = grep("_arm",names(training))
+dumbbell.vars = grep("_dumbbell",names(training))
+forearm.vars = grep("_forearm",names(training))
+
+#Run PCA on belt variables (3 variables to 97%)
+belt.prComp = prcomp(training[,belt.vars])
+summary(belt.prComp)
+
+#Run PCA on arm (4 variables to 97%)
+arm.prComp = prcomp(training[,arm.vars])
+summary(arm.prComp)
+
+#Run PCA on dumbbell (4 variables to 97%)
+dumbbell.prComp = prcomp(training[,dumbbell.vars])
+summary(dumbbell.prComp)
+
+#Run PCA on forearm (5 variables to 97%)
+forearm.prComp = prcomp(training[,forearm.vars])
+summary(forearm.prComp)
+
+#Cleanup unnecessary values
+rm(arm.vars);rm(belt.vars);rm(dumbbell.vars);rm(forearm.vars)
+
+```
+
+We can see that we only need a few of the principal components to capture around 97% of the variance.  The variables by the sensor are indeed highly correlated.  However, in later tests it appears that this was not helpful.
+
+However, when I put the principal coponents into a linear discriminante analysis, it didn't work.  I couldn't get an accuracy over 0.63 so I quite that route very quickly and moved on.  I created a data set of principal components but it didn't work.
+```{r,echo = TRUE}
+#Create prinicpal component data frames
+belt.prComp.values = data.frame(predict(belt.prComp,training))
+arm.prComp.values = data.frame(predict(arm.prComp,training))
+dumbbell.prComp.values = data.frame(predict(dumbbell.prComp,training))
+forearm.prComp.values = data.frame(predict(forearm.prComp,training))
+
+#Fix names of prinicpal components
+names(belt.prComp.values) = paste0("belt_",names(belt.prComp.values))
+names(arm.prComp.values) = paste0("arm_",names(arm.prComp.values))
+names(dumbbell.prComp.values) = paste0("dumbbell_",names(dumbbell.prComp.values))
+names(forearm.prComp.values) = paste0("forearm_",names(forearm.prComp.values))
+
+#create final PCA data set
+training.pca = training$classe
+training.pca = cbind(training.pca,belt.prComp.values[,1:5])
+training.pca = cbind(training.pca,arm.prComp.values[,1:5])
+training.pca = cbind(training.pca,dumbbell.prComp.values[,1:5])
+training.pca = cbind(training.pca,forearm.prComp.values[,1:5])
+training.pca$user_name = training$user_name
+names(training.pca)[1] = "classe"
+
+#Clearn up unnecessary data sets
+rm(belt.prComp.values);rm(arm.prComp.values);
+rm(dumbbell.prComp.values);rm(forearm.prComp.values)
+
+#Review final data set (Commented out for the presentaiton)
+#str(training.pca)
+```
+
+After all of the above preprocessing steps did not help, so I ran a 10-fold cross validation with a linear discriminate analysis.  It was the only model that appeared to run fast enough for this project.  
+```{r,echo=TRUE}
+
+#Set up 10 fold cross validation
+fitControl = trainControl(method = "repeatedcv",number = 10,repeats = 10)
+
+#Run lda model on training.pca data
+model.lda = train(classe~.,data = training,method = "lda", trControl = fitControl)
+model.lda
+```
+
+Now we will predict the outcomes on the testing data set for the linear dynamic analysis
+```{r,echo = TRUE}
+test.predict.lda= predict(model.lda,testing)
+confusionMatrix(test.predict.lda,testing$classe)
+```
+
+The accuracy is around 0.73 which is very close to what I got when I was developing on the training data set.
+
+Predict the final 20 as requested
+```{r,echo = TRUE}
+test.final = read.csv("pmL-testing.csv",header = TRUE)
+final.predict = predict(model.lda,newdata = test.final)
+final.predict
+```
+
+
+In conclusion, I was able to create a model using linear discriminate analysis that has an accuracy of 0.731 in the testing data set. However, this is short of the 80% accuracy threshold that was required for this project. I'll keep trying to rerun the model with several of the more sophisticated models, but I needed much more computational time to make this work to make the deadline.
+
+```{r,echo = TRUE}
+#Run Boosed Classification Trees model on training data
+#model.ada = train(classe~.,data = training,method = "ada", 
+#                  trControl = fitControl,
+#                  iter = 3,
+#                  max.iter = 10)
+#model.ada
+
+
+#Run Stochastic Gradient boosting
+#gbmGrid <-  expand.grid(interaction.depth = c(5),
+#                        n.trees = 50,
+#                        shrinkage = 0.1,
+#                        n.minobsinnode = 5)
+
+#model.gbm = train(classe~.,
+#                  data = training.pca,
+#                  method = "gbm", 
+#                  trControl = fitControl,
+#                  tuneGrid = gbmGrid)
+#model.gbm
+
+```
+
+
